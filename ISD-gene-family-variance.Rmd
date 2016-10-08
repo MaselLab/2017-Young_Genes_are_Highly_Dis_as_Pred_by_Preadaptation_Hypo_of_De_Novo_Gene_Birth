@@ -1,0 +1,63 @@
+---
+title: "Analysis of variance of ISD between genes and controls"
+author: "Ben Wilson"
+date: "June 24, 2016"
+output: html_document
+---
+  
+Load mySQL table info for genes
+```{r}
+ISD.data <- read.table("ISD_data.csv",header=T,sep=",") #read mySQL data into data frame
+```
+
+Remove phylostratum 0 (unclassifiable), gene families with ambiguous age, genes without rat homologs, and ORFan proteins
+```{r}
+ISD.data <- ISD.data[which(ISD.data$GeneFamilyPhylostratum != "0" & ISD.data$GeneFamilyPhylostratum != "20" & ISD.data$UnknownFamilyPhylostrataBinary != "1" & !is.na(ISD.data$EvolutionaryRateHighestOrthologRate)),] #exclude unclassifiable genes, false-positive rich ORFans
+```
+
+Format data frames to only the information needed
+```{r}
+ISD.data$GeneFamilyPhylostratum <- as.factor(ISD.data$GeneFamilyPhylostratum)
+intergenic.data <- ISD.data[which(ISD.data$GeneOrControlDesignation == "IntergenicNucleotideSeqControl" ),]
+intergenic.data$GeneFamilyPhylostratum <- "20"
+ISD.data <- ISD.data[which(ISD.data$GeneOrControlDesignation == "CodingGene" ),]
+ISD.data$GeneFamilyPhylostratum <- with(ISD.data, factor(GeneFamilyPhylostratum, levels = c(sort(unique(ISD.data$GeneFamilyPhylostratum)))))
+```
+
+Join old phylostrata where homology detection bias is an issue (pre-vertebrates)
+```{r}
+ISD.data[which(ISD.data$GeneFamilyPhylostratum %in% 1:10),]$GeneFamilyPhylostratum <- "10"
+```
+
+Aggregate means for each gene family
+```{r}
+aggregate.ISD <-aggregate(ISD.data$NoCysIUPredMeanISD, by=list(ISD.data$GeneFamilyNumber), FUN=mean, na.rm=TRUE)
+colnames(aggregate.ISD) <- c("GeneFamilyNumber", "NoCysIUPredMeanISD")
+family.phylostratum.map <- ISD.data[!duplicated(ISD.data$GeneFamilyNumber),c("GeneFamilyNumber","GeneFamilyPhylostratum")]
+gene.family.variance <- merge(aggregate.ISD,family.phylostratum.map, by.x = "GeneFamilyNumber", by.y = "GeneFamilyNumber")
+combined.variance <- rbind(gene.family.variance[,c("GeneFamilyPhylostratum","NoCysIUPredMeanISD")], intergenic.data[,c("GeneFamilyPhylostratum","NoCysIUPredMeanISD")])
+combined.variance$GeneFamilyPhylostratum <- with(combined.variance, factor(GeneFamilyPhylostratum, levels = c(sort(unique(combined.variance$GeneFamilyPhylostratum)))))
+combined.variance$Contrast <- rep(0,nrow(combined.variance)) #Create a binary contrast variable for phylostrata that do not have many gene families
+combined.variance[which(combined.variance$GeneFamilyPhylostratum == 18),]$Contrast <- 1
+combined.variance$Contrast <- as.factor(combined.variance$Contrast)
+```
+
+Visualize distributions of ISD variables within and between phylostratum
+```{r}
+library(ggplot2)
+
+ISD.gene.family.variance <- ggplot(data = combined.variance) + 
+  geom_violin(aes(x = GeneFamilyPhylostratum, y = NoCysIUPredMeanISD,  alpha = Contrast), linetype = 0, size = 0, fill = "grey",trim = FALSE, scale = "width") + 
+  geom_segment(aes(x=as.numeric(GeneFamilyPhylostratum)-.05, xend=as.numeric(GeneFamilyPhylostratum)+0.05, y=NoCysIUPredMeanISD, yend=NoCysIUPredMeanISD)) +
+  xlab("Phylostratum") +
+  ylab("Mean ISD") +
+  scale_alpha_manual(values = c(1,0), guide = FALSE) +
+  scale_x_discrete(labels=c("Pre-vert.","Vertebrata","Euteleostomi","Tetrapoda","Amniota","Mammalia","Eutheria","Boreoeuth.","Euarchon.","Rodentia","Intergenic")) + #change phylostratum labels to correspond to taxonomic nodes
+  theme(axis.text.x = element_text(angle = 0,hjust=0.5))
+ISD.gene.family.variance
+pdf(file = "GeneFamilyISDVariancePlot.pdf", width =8, height = 4)
+ISD.gene.family.variance
+dev.off()
+
+```
+
